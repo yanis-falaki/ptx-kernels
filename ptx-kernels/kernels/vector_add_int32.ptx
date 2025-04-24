@@ -1,0 +1,48 @@
+.version 8.7 // specify ISA version
+.target sm_75 // enough for my 2070super
+.address_size 64
+
+.visible .entry vectorAddInt32(
+    .param .u64 aPtr,
+    .param .u64 bPtr,
+    .param .u64 outputPtr,
+    .param .u32 n
+) {
+    .reg .pred %p1;
+    .reg .u64 %addr;
+    .reg .u32 %tmp<2>;
+    .reg .u64 %offset;
+
+    // compute global thread id, ctaid.x * ntid.x + tid.x
+    mov.u32 %tmp0, %ctaid.x;
+    mov.u32 %tmp1, %ntid.x;
+    mul.lo.u32 %tmp0, %tmp0, %tmp1; // tmp0 = ctaid.x * ntid.x
+    mov.u32 %tmp1, %tid.x;
+    add.u32 %tmp0, %tmp0, %tmp1; // tmp0 - ctaid.x * ntid.x + tid.x = global thread id
+    
+    // convert 32bit global tid into 64bit one which can be used for mem
+    cvt.u64.u32 %offset, %tmp0; // offset = global tid
+    mul.lo.u64 %offset, %offset, 4;
+
+    // mask out out of bounds access
+    ld.param.u32 %tmp1, [n];
+    setp.lt.u32 %p1, %tmp0, %tmp1;
+
+    // Load A value from memory
+    ld.param.u64        %addr, [aPtr];
+    add.u64             %addr, %addr, %offset;
+    @%p1 ld.global.u32  %tmp0, [%addr];
+
+    // Load B value form memory
+    ld.param.u64        %addr, [bPtr];
+    add.u64             %addr, %addr, %offset;
+    @%p1 ld.global.u32  %tmp1, [%addr];
+
+    // Add A and B and store in tmp0
+    add.s32 %tmp0, %tmp0, %tmp1;
+
+    // Write to output buffer
+    ld.param.u64 %addr, [outputPtr];
+    add.u64 %addr, %addr, %offset;
+    @%p1 st.global.u32 [%addr], %tmp0;
+}

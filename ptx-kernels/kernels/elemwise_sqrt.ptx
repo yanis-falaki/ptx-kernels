@@ -1,0 +1,47 @@
+.version 8.7 // specify ISA version
+.target sm_75 // enough for my 2070super
+.address_size 64
+
+//.visible directive makes kernel visible outside module
+.visible .entry sqrtElements(
+    .param .u64 inputPtr,
+    .param .u64 outputPtr,
+    .param .u32 n
+) {
+    .reg .pred %p1;
+    .reg .u64  %addr;
+    .reg .u32  %tmp<2>;
+    .reg .u64  %offset;
+    .reg .f32  %val;
+
+    // Compute the offset as ctaid.x*ntid.x + tid.x
+    mov.u32 %tmp0, %ctaid.x; // move block id into tmp0
+    mov.u32 %tmp1, %ntid.x;  // move block size into tmp1
+    mul.lo.u32 %tmp0, %tmp0, %tmp1;
+    /* multiply %tmp0 with %tmp1, store result in %tmp0.
+    The mul operation will "create" data which is twice the size of the two operands, specifying lo
+    means store only the lower half in the dst, making the dst the size of the two operands.
+    .hi which stores only the upper half, and .wide which stores all bytes and makes the dst twice the size of the operands.
+    */
+    mov.u32 %tmp1, %tid.x; // move local thread id into tmp1
+    add.u32 %tmp1, %tmp0, %tmp1; // add tmp1 and tmp0 and store in tmp1. (This is the result of ctaid.x*ntid.x + tid.x)
+    cvt.u64.u32 %offset, %tmp1; // converts tmp1 from u32 to u64 and stores in offset register
+    mul.lo.u64 %offset, %offset, 4; // multiplies global tid by 4 for array index as it stores float32s.
+
+    // Mask out-of-bounds accesses.
+    ld.param.u32 %tmp0, [n];
+    setp.lt.u32 %p1, %tmp1, %tmp0; // set predicate register p1 to true if tmp1 is less than tmp0. That is, %p1 = tid < n
+
+    // Load the value from memory.
+    ld.param.u64 %addr, [inputPtr]; // load array base pointer into addr reg
+    add.u64 %addr, %addr, %offset; // add offset to array bp and move addr reg
+    @%p1 ld.global.f32 %val, [%addr]; // Load global float32 file from address pointed to addr reg into val reg, only if p1 is true.
+
+    // Element-wise operation itself
+    @%p1 sqrt.approx.f32 %val, %val;
+
+    // Store back the output
+    ld.param.u64 %addr, [outputPtr];
+    add.u64 %addr, %addr, %offset;
+    @%p1 st.global.f32 [%addr], %val; 
+}
