@@ -10,58 +10,124 @@
     .param .u32 n,
     .param .u32 k
 ) { 
-    .reg .pred px, py;
-    .reg .u32 %tmp<2>;
-    .reg .u64 %offset;
-    .reg .u64 %address;
-
-    // compute global y id, ctaid.y * ntid.y + tid.y
-    mov.u32 %tmp0, %ctaid.y;
-    mov.u32 %tmp1, %ntid.y;
-    mul.lo.u32 %tmp0, %tmp0, %tmp1;
-    mov.u32 %tmp1, %tid.y;
-    add.u32 %tmp0, %tmp0, %tmp1;
-
-    // compute y offset, yOffset = y * m
-    cvt.u64.u32 %address, %tmp0;
-    ld.param.u64 %offset, [m];
-    mul.lo.u64 %address, %address, %offset;
-
-    // check if y is out of bounds
-    cvt.u32.u64 %tmp1, %offset; // reusing the m loaded from computing y offset
-    setp.hs.u32 py, %tmp0, %tmp1;
-
-    // compute global x id, ctaid.x * ntid.x + tid.x
-    mov.u32 %tmp0, %ctaid.x;
-    mov.u32 %tmp1, %ntid.x;
-    mul.lo.u32 %tmp0, %tmp0, %tmp1;
-    mov.u32 %tmp1, %tid.x;
-    add.u32 %tmp0, %tmp0, %tmp1;
-
-    // compute total byte offset, offset = (y + x) * 4
-    cvt.u64.u32 %offset, %tmp0;
-    add.u64 %address, %address, %offset;
-    mul.lo.u64 %address, %address, 4;
-
-    // check if x is out of bounds
-    ld.param.u32 %tmp1, [n];
-    setp.hs.u32 px, %tmp0, %tmp1;
-
-    // check if either is out of bounds and exit if true
-    or.pred px, px, py;
-@px exit;
-
-    // calculate position in c matrix
+    .reg .pred p1;
+    .reg .u32 tmp<2>;
+    .reg .u32 x, y;
+    .reg .u32 idx; // for looping through col/row
+    .reg .u64 aValOffset, bValOffset;
+    .reg .u64 interResult; // for intermediate u64 calculations
+    .reg .f32 aVal, bVal, cVal;
 
 
-    // iterate through k rows/columns and store result in c 
+    // compute x
+    mov.u32 tmp0, %ctaid.x;
+    mov.u32 tmp1, %ntid.x;
+    mul.lo.u32 tmp0, tmp0, tmp1;
+    mov.u32 tmp1, %tid.x;
+    add.u32 x, tmp0, tmp1;
+
+    // compute y
+    mov.u32 tmp0, %ctaid.y;
+    mov.u32 tmp1, %ntid.y;
+    mul.lo.u32 tmp0, tmp0, tmp1;
+    mov.u32 tmp1, %tid.y;
+    add.u32 y, tmp0, tmp1;
+
+    // check x bounds
+    ld.param.u32 tmp0, [m];
+    setp.hs.u32 p1, x, tmp0;
+    @p1 exit;
+    // check y bounds
+    ld.param.u32 tmp1, [n];
+    setp.hs.u32 p1, y, tmp1;
+    @p1 exit;
+
+    // precomputing values
+    // aValOffset = aPtr + y*k*4
+    ld.param.u32 tmp1, [k];
+    mul.lo.u32 tmp0, tmp1, y;
+    mul.lo.u32 tmp0, tmp0, 4;
+    cvt.u64.u32 interResult, tmp0; //
+    ld.param.u64 aValOffset, [aPtr];
+    add.u64 aValOffset, aValOffset, interResult;
+
+    // bValOffset = bPtr + x*4
+    mul.lo.u32 tmp0, x, 4;
+    cvt.u64.u32 interResult, tmp0;
+    ld.param.u64 bValOffset, [bPtr];
+    add.u64 bValOffset, bValOffset, interResult;
+    
+    // cVal, i = 0
+    mov.f32 cVal, 0.0;
+    mov.u32 idx, 0;
+
+    // precomputing 4n
+    ld.param.u32 tmp0, [n];
+    cvt.u64.u32 interResult, tmp0;
+    mul.lo.u64 interResult, interResult, 4;
+
+loop_start: 
+    ld.global.f32 aVal, [aValOffset];
+    ld.global.f32 bVal, [bValOffset];
+    fma.rn.f32 cVal, aVal, bVal, cVal;
+
+    // increment aValOffset
+    add.u64 aValOffset, aValOffset, 4;
+    // increment bValOffset
+    add.u64 bValOffset, bValOffset, interResult;
+
+    // increment i and break if equal or past k, k still loaded in tmp1
+    add.u32 idx, idx, 1;
+    setp.lt.u32 p1, idx, tmp1;
+@p1  bra.uni loop_start;
+
+    // compute c linear offset
+    // (y*n + x)*4
+    ld.param.u32 tmp1, [n];
+    mad.lo.u32 tmp0, tmp1, y, x;
+    mul.lo.u32 tmp0, tmp0, 4;
+    cvt.u64.u32 interResult, tmp0;
+
+    // store result
+    ld.param.u64 aValOffset, [cPtr];
+    add.u64 interResult, aValOffset, interResult;
+    st.global.f32 [interResult], cVal;
 }
 
+
 /*
+reference cuda kernel
+
+A matrix = m x k
+B matrix = k x n
 
 __global__ naive_matmul(void* aPtr, void* bPtr, void* cPtr, int m, int n, int k) \
 {
-    yId = tid.y + 
-}
+    int y = threadIdx.y + blockIdx.y*blockDim.y;
+    int x = threadIdx.x + blockIdx.x*blockDim.x;
 
+    if (y >= m || x >= n) return;
+
+
+    // precomputing values
+    void* aValOffset = aPtr + y*k*4;
+    void* bValOffset = bPtr + x*4;
+    float cVal = 0;
+
+    for (int i = 0; i < k; ++i) {
+    
+        float aVal = *(float*)aValOffset;
+        float bVal = *(float*)bValOffset;
+
+        cVal += aVal * bVal;
+
+        aValOffset += 4;
+        bValOffset += 4*n;
+    }
+
+    // set c value
+    // compute linear offset
+    void* outPtr = cPtr + (y*n + x)*4;
+    *(float*)outPtr = cVal;
+}
 */
