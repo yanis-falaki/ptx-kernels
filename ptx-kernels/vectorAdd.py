@@ -2,7 +2,7 @@ from math import ceil
 import numpy as np
 from context import compile_function, gpu_to_numpy, numpy_to_gpu, sync
 
-def vectorAddInt32():
+def vector_add_int32():
     fn = compile_function("vector_add_int32.ptx", "vectorAddInt32")
     
     N = np.int32(10_000)
@@ -38,4 +38,4 @@ def vectorAddInt32():
     
 
 if __name__ == "__main__":
-    vectorAddInt32()
+    vector_add_int32()

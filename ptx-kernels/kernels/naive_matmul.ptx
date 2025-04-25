@@ -1,0 +1,67 @@
+.version 8.7
+.target sm_75
+.address_size 64
+
+.visible .entry naive_matmul(
+    .param .u64 aPtr,
+    .param .u64 bPtr,
+    .param .u64 cPtr,
+    .param .u32 m,
+    .param .u32 n,
+    .param .u32 k
+) { 
+    .reg .pred px, py;
+    .reg .u32 %tmp<2>;
+    .reg .u64 %offset;
+    .reg .u64 %address;
+
+    // compute global y id, ctaid.y * ntid.y + tid.y
+    mov.u32 %tmp0, %ctaid.y;
+    mov.u32 %tmp1, %ntid.y;
+    mul.lo.u32 %tmp0, %tmp0, %tmp1;
+    mov.u32 %tmp1, %tid.y;
+    add.u32 %tmp0, %tmp0, %tmp1;
+
+    // compute y offset, yOffset = y * m
+    cvt.u64.u32 %address, %tmp0;
+    ld.param.u64 %offset, [m];
+    mul.lo.u64 %address, %address, %offset;
+
+    // check if y is out of bounds
+    cvt.u32.u64 %tmp1, %offset; // reusing the m loaded from computing y offset
+    setp.hs.u32 py, %tmp0, %tmp1;
+
+    // compute global x id, ctaid.x * ntid.x + tid.x
+    mov.u32 %tmp0, %ctaid.x;
+    mov.u32 %tmp1, %ntid.x;
+    mul.lo.u32 %tmp0, %tmp0, %tmp1;
+    mov.u32 %tmp1, %tid.x;
+    add.u32 %tmp0, %tmp0, %tmp1;
+
+    // compute total byte offset, offset = (y + x) * 4
+    cvt.u64.u32 %offset, %tmp0;
+    add.u64 %address, %address, %offset;
+    mul.lo.u64 %address, %address, 4;
+
+    // check if x is out of bounds
+    ld.param.u32 %tmp1, [n];
+    setp.hs.u32 px, %tmp0, %tmp1;
+
+    // check if either is out of bounds and exit if true
+    or.pred px, px, py;
+@px exit;
+
+    // calculate position in c matrix
+
+
+    // iterate through k rows/columns and store result in c 
+}
+
+/*
+
+__global__ naive_matmul(void* aPtr, void* bPtr, void* cPtr, int m, int n, int k) \
+{
+    yId = tid.y + 
+}
+
+*/
